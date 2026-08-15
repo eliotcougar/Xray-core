@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"math"
 	"math/big"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -23,6 +24,7 @@ type XmuxClient struct {
 	LeftRequests atomic.Int32
 	UnreusableAt time.Time
 	NotUsed      atomic.Bool
+	closeOnce    sync.Once
 }
 
 func (c *XmuxClient) AddRunning() {
@@ -37,7 +39,9 @@ func (c *XmuxClient) DoneRunning() {
 // close the XmuxConn if it is not used and has no running requests
 func (c *XmuxClient) maybeClose() {
 	if c.NotUsed.Load() && c.Running.Load() <= 0 {
-		common.Close(c.XmuxConn)
+		c.closeOnce.Do(func() {
+			common.Close(c.XmuxConn)
+		})
 	}
 }
 
@@ -76,6 +80,18 @@ func (m *XmuxManager) newXmuxClient() *XmuxClient {
 	}
 	m.xmuxClients = append(m.xmuxClients, xmuxClient)
 	return xmuxClient
+}
+
+// retire prevents future use of every client owned by this detached manager.
+// Active clients close naturally after their final stream calls DoneRunning.
+func (m *XmuxManager) retire() int {
+	retired := len(m.xmuxClients)
+	for _, xmuxClient := range m.xmuxClients {
+		xmuxClient.NotUsed.Store(true)
+		xmuxClient.maybeClose()
+	}
+	m.xmuxClients = nil
+	return retired
 }
 
 func (m *XmuxManager) GetXmuxClient(ctx context.Context) *XmuxClient { // when locking

@@ -46,6 +46,24 @@ var (
 	globalDialerAccess sync.Mutex
 )
 
+// RetireHTTPClients removes all cached XHTTP clients from consideration for
+// future streams. Clients with active streams are allowed to drain and are
+// closed when their last stream finishes; idle clients are closed immediately.
+func RetireHTTPClients() int {
+	globalDialerAccess.Lock()
+	dialers := globalDialerMap
+	globalDialerMap = nil
+	globalDialerAccess.Unlock()
+
+	// Closing transports outside the global lock lets new streams start without
+	// waiting for retired clients to finish their cleanup.
+	retired := 0
+	for _, dialer := range dialers {
+		retired += dialer.retire()
+	}
+	return retired
+}
+
 func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (DialerClient, *XmuxClient) {
 	realityConfig := reality.ConfigFromStreamSettings(streamSettings)
 
