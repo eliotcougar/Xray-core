@@ -39,7 +39,35 @@ type Observer struct {
 }
 
 func (o *Observer) GetObservation(ctx context.Context) (proto.Message, error) {
-	return &ObservationResult{Status: o.status}, nil
+	o.statusLock.Lock()
+	defer o.statusLock.Unlock()
+	return proto.Clone(&ObservationResult{Status: o.status}), nil
+}
+
+func (o *Observer) SnapshotObservation() ([]byte, error) {
+	o.statusLock.Lock()
+	defer o.statusLock.Unlock()
+	return proto.Marshal(&ObservationResult{Status: o.status})
+}
+
+func (o *Observer) RestoreObservation(state []byte, allowed []string) error {
+	if o.finished != nil {
+		return errors.New("observation state must be restored before Start")
+	}
+	var result ObservationResult
+	if err := proto.Unmarshal(state, &result); err != nil {
+		return err
+	}
+	var restored []*OutboundStatus
+	for _, status := range result.Status {
+		if status != nil && slices.Contains(allowed, status.OutboundTag) {
+			restored = append(restored, status)
+		}
+	}
+	o.statusLock.Lock()
+	defer o.statusLock.Unlock()
+	o.status = restored
+	return nil
 }
 
 func (o *Observer) Type() interface{} {

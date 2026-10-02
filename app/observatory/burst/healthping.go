@@ -34,6 +34,8 @@ type HealthPing struct {
 
 	Settings *HealthPingSettings
 	Results  map[string]*HealthPingRTTS
+	// A restored sample window is provisional until this network supplies a new result.
+	restored map[string]bool
 }
 
 // NewHealthPing creates a new HealthPing with settings
@@ -234,6 +236,10 @@ func (h *HealthPing) doCheck(ctx context.Context, tags []string, duration time.D
 func (h *HealthPing) PutResult(tag string, rtt time.Duration) {
 	h.access.Lock()
 	defer h.access.Unlock()
+	if h.restored[tag] {
+		delete(h.Results, tag)
+		delete(h.restored, tag)
+	}
 	if h.Results == nil {
 		h.Results = make(map[string]*HealthPingRTTS)
 	}
