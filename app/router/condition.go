@@ -339,6 +339,7 @@ func NewProcessNameMatcher(names []string) *ProcessNameMatcher {
 }
 
 func (m *ProcessNameMatcher) Apply(ctx routing.Context) bool {
+	resolvedContext := ctx
 	// DNS resolution must not replace the socket's original destination, and all
 	// process rules in one routing decision must observe the same owner.
 	var processContext *processRoutingContext
@@ -382,6 +383,9 @@ unwrap:
 	if len(ctx.GetTargetIPs()) > 0 {
 		dstIP = ctx.GetTargetIPs()[0].String()
 		dstPort = uint16(ctx.GetTargetPort())
+	} else if ips := resolvedContext.GetTargetIPs(); len(ips) > 0 {
+		dstIP = ips[0].String()
+		dstPort = uint16(resolvedContext.GetTargetPort())
 	}
 
 	lookup := net.FindProcess
