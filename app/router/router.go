@@ -20,7 +20,6 @@ type Router struct {
 	rules          []*Rule
 	balancers      map[string]*Balancer
 	dns            dns.Client
-	processLookup  processLookupFunc
 
 	ctx        context.Context
 	ohm        outbound.Manager
@@ -244,7 +243,6 @@ func (r *Router) ListRule() []routing.Route {
 }
 
 func (r *Router) pickRouteInternal(ctx routing.Context) (*Rule, routing.Context, error) {
-	ctx = &processRoutingContext{Context: ctx, findProcess: r.processLookup}
 	// SkipDNSResolve is set from DNS module.
 	// the DOH remote server maybe a domain name,
 	// this prevents cycle resolving dead loop
