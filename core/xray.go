@@ -380,6 +380,21 @@ func (s *Instance) GetFeature(featureType interface{}) features.Feature {
 	return getFeature(s.features, reflect.TypeOf(featureType))
 }
 
+// GetFeatures returns all registered implementations of a feature type.
+// The returned slice is independent of the instance's feature registry.
+func (s *Instance) GetFeatures(featureType interface{}) []features.Feature {
+	s.resolveLock.Lock()
+	defer s.resolveLock.Unlock()
+	t := reflect.TypeOf(featureType)
+	var result []features.Feature
+	for _, feature := range s.features {
+		if reflect.TypeOf(feature.Type()) == t {
+			result = append(result, feature)
+		}
+	}
+	return result
+}
+
 // Start starts the Xray instance, including all registered features. When Start returns error, the state of the instance is unknown.
 // A Xray instance can be started only once. Upon closing, the instance is not guaranteed to start again.
 //
