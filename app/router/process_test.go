@@ -215,3 +215,32 @@ func TestProcessRoutingConcurrentDecisions(t *testing.T) {
 		t.Fatal(calls.Load())
 	}
 }
+
+func TestProcessRoutingDomainDestinationFallback(t *testing.T) {
+	ctl := gomock.NewController(t)
+	dns := mocks.NewDNSClient(ctl)
+	dns.EXPECT().LookupIP("example.test", gomock.Any()).Return([]net.IP{{203, 0, 113, 9}}, uint32(60), nil).Times(1)
+	config := processTestConfig()
+	config.DomainStrategy = Config_IpOnDemand
+	r := new(Router)
+	if err := r.Init(context.Background(), config, dns, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	r.processLookup = func(_, _ string, _ uint16, dst string, dstPort uint16) (int, string, string, error) {
+		calls++
+		if dst != "203.0.113.9" || dstPort != 443 {
+			t.Fatalf("wrong domain fallback %s:%d", dst, dstPort)
+		}
+		return 10001, "10001", "", nil
+	}
+	ctx := session.ContextWithInbound(context.Background(), &session.Inbound{Source: net.TCPDestination(net.ParseAddress("172.16.0.1"), 45678)})
+	ctx = session.ContextWithOutbounds(ctx, []*session.Outbound{{Target: net.TCPDestination(net.DomainAddress("example.test"), 443)}})
+	route, err := r.PickRoute(routing_session.AsRoutingContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.GetOutboundTag() != "special" || calls != 1 {
+		t.Fatalf("tag=%s lookups=%d", route.GetOutboundTag(), calls)
+	}
+}
