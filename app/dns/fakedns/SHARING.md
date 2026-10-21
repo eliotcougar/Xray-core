@@ -78,8 +78,16 @@ handled. Pool geometry changes require consumer restart. Mappings survive consum
 replacement, not authority restart or ordinary LRU eviction; this is not persistent
 storage or a distributed consensus protocol.
 
-Enable the service only on a trusted control endpoint. Like other Xray API
-services, it does not add authentication itself. The configured remote client uses
-plaintext gRPC, suitable for a local endpoint or an externally protected tunnel;
-it must not be pointed at an untrusted public API. The API exposes domain mappings
-and can allocate entries, so it needs the same access control as other admin APIs.
+## Local access
+
+All three RPCs require a direct API connection over loopback TCP (IPv4 or IPv6)
+or a local Unix socket. Configure `api.listen`, for example `127.0.0.1:8080` or
+`/run/xray/fakedns.sock`. Nonlocal connections return `PermissionDenied` before
+reading or allocating mappings. The routed API path exposes synthetic connection
+addresses and is also denied, even when its inbound listens on loopback.
+Forwarding headers do not establish local access.
+
+This is a transport reachability check, not local-user authentication. The client
+uses plaintext gRPC; keep it local and protect the API and Unix socket permissions
+as other administrative interfaces. Existing API services retain their current
+access behavior.

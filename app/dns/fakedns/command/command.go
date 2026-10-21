@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	mdns "github.com/miekg/dns"
+	"github.com/xtls/xray-core/app/commander"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/core"
@@ -27,6 +28,9 @@ type contextualEngine interface {
 }
 
 func (s *service) GetPools(ctx context.Context, _ *GetPoolsRequest) (*GetPoolsResponse, error) {
+	if err := commander.RequireLocal(ctx); err != nil {
+		return nil, err
+	}
 	provider, ok := s.engine.(dns.FakeDNSPoolProvider)
 	if !ok {
 		return nil, status.Error(codes.Unimplemented, "FakeDNS engine does not expose its pools")
@@ -39,6 +43,9 @@ func (s *service) GetPools(ctx context.Context, _ *GetPoolsRequest) (*GetPoolsRe
 }
 
 func (s *service) Allocate(ctx context.Context, request *AllocateRequest) (*AllocateResponse, error) {
+	if err := commander.RequireLocal(ctx); err != nil {
+		return nil, err
+	}
 	domain := request.GetDomain()
 	if _, ok := mdns.IsDomainName(domain); !ok || strings.ContainsAny(domain, "\x00\r\n\t ") {
 		return nil, status.Error(codes.InvalidArgument, "invalid domain")
@@ -74,6 +81,9 @@ func (s *service) Allocate(ctx context.Context, request *AllocateRequest) (*Allo
 }
 
 func (s *service) ReverseLookup(ctx context.Context, request *ReverseLookupRequest) (*ReverseLookupResponse, error) {
+	if err := commander.RequireLocal(ctx); err != nil {
+		return nil, err
+	}
 	ip := request.GetIp()
 	if len(ip) != 4 && len(ip) != 16 {
 		return nil, status.Error(codes.InvalidArgument, "IP address must contain 4 or 16 bytes")

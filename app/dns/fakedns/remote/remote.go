@@ -33,15 +33,12 @@ type Engine struct {
 	cancel    context.CancelFunc
 	timeout   time.Duration
 	pools     atomic.Pointer[pools]
-	closeOnce sync.Once
-	closeErr  error
 }
 
 var _ dns.FakeDNSEngineRev0 = (*Engine)(nil)
 var _ dns.FakeDNSPoolProvider = (*Engine)(nil)
 
-// New configures a direct connection to a trusted API endpoint. Protect nonlocal API access
-// with an authenticated transport, just as for the other Xray control services.
+// New configures a direct connection to a local API endpoint.
 // No traffic is sent until Start; the connection is shared by all mapping calls.
 func New(ctx context.Context, address string, timeout uint32) (*Engine, error) {
 	if address == "" {
@@ -108,15 +105,15 @@ func (e *Engine) Start() error {
 }
 
 func (e *Engine) Close() error {
-	e.closeOnce.Do(func() {
-		e.cancel()
-		e.lifecycle.Lock()
-		defer e.lifecycle.Unlock()
-		if e.conn != nil {
-			e.closeErr = e.conn.Close()
-		}
-	})
-	return e.closeErr
+	e.cancel()
+	e.lifecycle.Lock()
+	defer e.lifecycle.Unlock()
+	if e.conn != nil {
+		conn := e.conn
+		e.conn = nil
+		return conn.Close()
+	}
+	return nil
 }
 
 func (e *Engine) GetFakeIPRanges() []string {
