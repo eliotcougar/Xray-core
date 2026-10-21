@@ -1,0 +1,81 @@
+# Sharing FakeDNS mappings
+
+When DNS is answered by one core and traffic is handled by another, independent
+allocators for the same synthetic range are unsafe: the receiving core may not
+know a domain, or may have allocated that address to another domain. Sharing only
+the CIDRs or forwarding DNS requests does not provide reverse mapping ownership.
+
+This feature offers one authoritative bounded allocator and a `FakeDNSService`
+using Xray's existing API transport. It supports desktop clients with isolated
+DNS/TUN/data processes, a long-lived DNS process with replaceable traffic cores,
+and other controllers that need both allocation and reverse lookup. Ordinary
+single-core configurations remain unchanged; Go applications that already share
+one engine in-process do not need the RPC.
+
+## Configuration
+
+The authority uses ordinary local pools and enables the service:
+
+```json
+{
+  "api": {
+    "tag": "api",
+    "listen": "127.0.0.1:8080",
+    "services": ["FakeDNSService"]
+  },
+  "fakedns": [
+    { "ipPool": "198.18.0.0/15", "poolSize": 65535 },
+    { "ipPool": "2001:2::/48", "poolSize": 65535 }
+  ],
+  "outbounds": [{ "protocol": "freedom" }]
+}
+```
+
+Consumers select the remote engine instead of local pools:
+
+```json
+{
+  "fakedns": {
+    "remote": { "address": "127.0.0.1:8080", "timeout": 2000 }
+  },
+  "dns": { "servers": ["fakedns"] }
+}
+```
+
+Their traffic inbounds still need the usual FakeDNS sniffing/destination override
+configuration. The remote engine implements the same FakeDNS feature interfaces,
+so DNS and sniffing need no private protocols or alternate DNS-server scheme.
+Pool settings and `remote` are mutually exclusive. `timeout` is a per-call deadline
+in milliseconds; omitted/zero means 2000. gRPC targets include TCP endpoints and
+`unix:///run/xray/fakedns.sock` on systems supporting Unix sockets.
+
+## API and behavior
+
+- `GetPools` reports initialized CIDRs, not the contents of the mapping table.
+- `Allocate` selects IPv4 and/or IPv6 and uses the authority's existing LRU.
+- `ReverseLookup` takes a binary IP and returns an empty domain for unknown/evicted
+  addresses. It never allocates a replacement mapping.
+
+The remote engine opens one reusable gRPC connection, fetches and validates pool
+ranges at Start, and performs membership checks locally. Allocation and reverse
+lookup always consult the authority. There is no replicated reverse cache, local
+fallback allocator, import/export of arbitrary mappings or unbounded journal.
+Closing a consumer cancels its calls and closes its connection without closing
+the authority. IPv4/IPv6 selection and LRU eviction keep their native semantics.
+Use the same domain spelling/canonicalization as the local engine: the API does
+not introduce a separate domain-key normalization rule.
+
+The authority must be available before consumers start. An unavailable authority
+makes consumer startup fail or mapping calls return no result, rather than silently
+creating a competing allocator. The existing engine interface has no error return
+for mapping queries. Authority loss does not itself create a general traffic
+firewall: the controller must decide how traffic to unknown synthetic addresses is
+handled. Pool geometry changes require consumer restart. Mappings survive consumer
+replacement, not authority restart or ordinary LRU eviction; this is not persistent
+storage or a distributed consensus protocol.
+
+Enable the service only on a trusted control endpoint. Like other Xray API
+services, it does not add authentication itself. The configured remote client uses
+plaintext gRPC, suitable for a local endpoint or an externally protected tunnel;
+it must not be pointed at an untrusted public API. The API exposes domain mappings
+and can allocate entries, so it needs the same access control as other admin APIs.

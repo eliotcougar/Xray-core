@@ -13,4 +13,13 @@ message FakeDnsPool{
 
 message FakeDnsPoolMulti{
   repeated FakeDnsPool pools = 1;
+  // Mutually exclusive with local pools. Uses FakeDNSService on another core.
+  RemoteConfig remote = 2;
+}
+
+message RemoteConfig {
+  // gRPC target, e.g. 127.0.0.1:8080 or unix:///run/xray/fakedns.sock.
+  string address = 1;
+  // Per-call deadline in milliseconds. Zero uses 2000 ms.
+  uint32 timeout = 2;
 }

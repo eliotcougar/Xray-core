@@ -21,3 +21,9 @@ type FakeDNSEngineRev0 interface {
 	IsIPInIPPool(ip net.Address) bool
 	GetFakeIPForDomain3(domain string, IPv4, IPv6 bool) []net.Address
 }
+
+// FakeDNSPoolProvider optionally exposes the initialized CIDRs of an engine.
+// The returned slice is owned by the caller. It contains no mapping entries.
+type FakeDNSPoolProvider interface {
+	GetFakeIPRanges() []string
+}
