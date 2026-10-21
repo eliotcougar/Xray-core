@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -175,6 +176,10 @@ func TestServiceRejectsMalformedRequests(t *testing.T) {
 	c := command.NewFakeDNSServiceClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	longDomain := strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61) + "."
+	if _, err := c.Allocate(ctx, &command.AllocateRequest{Domain: longDomain, Ipv4: true}); err != nil {
+		t.Fatal("rejected maximum-length valid DNS name", len(longDomain), err)
+	}
 	for _, req := range []*command.AllocateRequest{{Domain: "", Ipv4: true}, {Domain: "bad\n.example", Ipv4: true}, {Domain: "okay.example"}} {
 		if _, err := c.Allocate(ctx, req); status.Code(err) != codes.InvalidArgument {
 			t.Fatalf("%v: %v", req, err)

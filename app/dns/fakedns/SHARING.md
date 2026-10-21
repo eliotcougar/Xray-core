@@ -62,6 +62,10 @@ lookup always consult the authority. There is no replicated reverse cache, local
 fallback allocator, import/export of arbitrary mappings or unbounded journal.
 Closing a consumer cancels its calls and closes its connection without closing
 the authority. IPv4/IPv6 selection and LRU eviction keep their native semantics.
+Construction opens no connection; failed startup closes its candidate connection,
+and closing during startup cancels pool discovery. If a consumer also exposes the
+mapping service, forwarded calls preserve the caller's deadline/cancellation and
+the authority's RPC errors. Reverse-domain replies are validated before use.
 Use the same domain spelling/canonicalization as the local engine: the API does
 not introduce a separate domain-key normalization rule.
 

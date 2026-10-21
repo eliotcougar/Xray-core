@@ -43,12 +43,20 @@ func (f *FakeDNSConfig) UnmarshalJSON(data []byte) error {
 	// Reset the union when a configuration object is decoded more than once.
 	*f = FakeDNSConfig{}
 	var object map[string]json.RawMessage
-	if json.Unmarshal(data, &object) == nil && object["remote"] != nil {
-		if len(object) != 1 || string(object["remote"]) == "null" {
+	var remoteJSON json.RawMessage
+	if json.Unmarshal(data, &object) == nil {
+		for key, value := range object {
+			if strings.EqualFold(key, "remote") {
+				remoteJSON = value
+			}
+		}
+	}
+	if remoteJSON != nil {
+		if len(object) != 1 || string(remoteJSON) == "null" {
 			return errors.New("remote FakeDNS cannot have local pool settings")
 		}
 		var remote fakedns.RemoteConfig
-		if err := json.Unmarshal(object["remote"], &remote); err != nil {
+		if err := json.Unmarshal(remoteJSON, &remote); err != nil {
 			return err
 		}
 		if remote.Address == "" {
@@ -86,6 +94,9 @@ func (f *FakeDNSConfig) Build() (*fakedns.FakeDnsPoolMulti, error) {
 
 	if f.pools != nil {
 		for _, v := range f.pools {
+			if v == nil {
+				return nil, errors.New("FakeDNS pool cannot be null")
+			}
 			fakeDNSPool.Pools = append(fakeDNSPool.Pools, &fakedns.FakeDnsPool{IpPool: v.IPPool, LruSize: v.LRUSize})
 		}
 		return &fakeDNSPool, nil

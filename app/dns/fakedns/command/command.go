@@ -19,6 +19,13 @@ type service struct {
 	engine dns.FakeDNSEngine
 }
 
+// Remote engines can forward a request without discarding its deadline or
+// converting a backend error into an apparently successful empty lookup.
+type contextualEngine interface {
+	Allocate(context.Context, string, bool, bool) ([]net.Address, error)
+	ReverseLookup(context.Context, net.Address) (string, error)
+}
+
 func (s *service) GetPools(ctx context.Context, _ *GetPoolsRequest) (*GetPoolsResponse, error) {
 	provider, ok := s.engine.(dns.FakeDNSPoolProvider)
 	if !ok {
@@ -33,7 +40,7 @@ func (s *service) GetPools(ctx context.Context, _ *GetPoolsRequest) (*GetPoolsRe
 
 func (s *service) Allocate(ctx context.Context, request *AllocateRequest) (*AllocateResponse, error) {
 	domain := request.GetDomain()
-	if _, ok := mdns.IsDomainName(domain); !ok || len(domain) > 253 || strings.ContainsAny(domain, "\x00\r\n\t ") {
+	if _, ok := mdns.IsDomainName(domain); !ok || strings.ContainsAny(domain, "\x00\r\n\t ") {
 		return nil, status.Error(codes.InvalidArgument, "invalid domain")
 	}
 	if !request.GetIpv4() && !request.GetIpv6() {
@@ -46,7 +53,16 @@ func (s *service) Allocate(ctx context.Context, request *AllocateRequest) (*Allo
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	ips := engine.GetFakeIPForDomain3(domain, request.Ipv4, request.Ipv6)
+	var ips []net.Address
+	if remote, ok := s.engine.(contextualEngine); ok {
+		var err error
+		ips, err = remote.Allocate(ctx, domain, request.Ipv4, request.Ipv6)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		ips = engine.GetFakeIPForDomain3(domain, request.Ipv4, request.Ipv6)
+	}
 	response := &AllocateResponse{}
 	for _, ip := range ips {
 		response.Ips = append(response.Ips, ip.IP())
@@ -65,7 +81,17 @@ func (s *service) ReverseLookup(ctx context.Context, request *ReverseLookupReque
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	return &ReverseLookupResponse{Domain: s.engine.GetDomainFromFakeDNS(net.IPAddress(ip))}, nil
+	var domain string
+	if remote, ok := s.engine.(contextualEngine); ok {
+		var err error
+		domain, err = remote.ReverseLookup(ctx, net.IPAddress(ip))
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		domain = s.engine.GetDomainFromFakeDNS(net.IPAddress(ip))
+	}
+	return &ReverseLookupResponse{Domain: domain}, nil
 }
 
 func (s *service) Register(server *grpc.Server) {
