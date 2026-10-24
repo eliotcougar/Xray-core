@@ -87,6 +87,9 @@ func fetch(ctx context.Context, s CachedNameserver, fqdn string, option dns.IPOp
 		}
 		r := q.wait(ctx)
 		if len(r.ips) > 0 {
+			if option.IPv4Enable != option.IPv6Enable {
+				return r.ips, r.ttl, nil
+			}
 			ips = append(ips, r.ips...)
 			ttl = min(ttl, r.ttl)
 		} else if r.error != nil {
