@@ -8,7 +8,6 @@ import (
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/log"
 	"github.com/xtls/xray-core/common/net"
-	"github.com/xtls/xray-core/common/signal/pubsub"
 	"github.com/xtls/xray-core/features/dns"
 )
 
@@ -48,7 +47,7 @@ func queryIP(ctx context.Context, s CachedNameserver, domain string, option dns.
 }
 
 func pull(ctx context.Context, s CachedNameserver, fqdn string, option dns.IPOption) {
-	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
+	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sharedQueryTimeout)
 	defer cancel()
 
 	fetch(nctx, s, fqdn, option)
@@ -58,26 +57,52 @@ func fetch(ctx context.Context, s CachedNameserver, fqdn string, option dns.IPOp
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
-	key := fqdn
-	switch {
-	case option.IPv4Enable && option.IPv6Enable:
-		key = key + "46"
-	case option.IPv4Enable:
-		key = key + "4"
-	case option.IPv6Enable:
-		key = key + "6"
+	cache := s.getCacheController()
+	join := func(ipv4 bool) (*sharedQuery, func()) {
+		family := "6"
+		if ipv4 {
+			family = "4"
+		}
+		return cache.requestGroup.join(ctx, fqdn+family, cache.queryTimeout, func(queryCtx context.Context) result {
+			return doFetch(queryCtx, s, fqdn, dns.IPOption{IPv4Enable: ipv4, IPv6Enable: !ipv4})
+		})
 	}
-
-	pending := s.getCacheController().requestGroup.DoChan(key, func() (any, error) {
-		return doFetch(ctx, s, fqdn, option), nil
-	})
-	select {
-	case <-ctx.Done():
-		return nil, 0, ctx.Err()
-	case shared := <-pending:
-		ret := shared.Val.(result)
-		return ret.ips, ret.ttl, ret.error
+	var q4, q6 *sharedQuery
+	if option.IPv4Enable {
+		q, release := join(true)
+		q4 = q
+		defer release()
 	}
+	if option.IPv6Enable {
+		q, release := join(false)
+		q6 = q
+		defer release()
+	}
+	var ips []net.IP
+	ttl := uint32(dns.DefaultTTL)
+	var errs []error
+	for _, q := range []*sharedQuery{q4, q6} {
+		if q == nil {
+			continue
+		}
+		r := q.wait(ctx)
+		if len(r.ips) > 0 {
+			ips = append(ips, r.ips...)
+			ttl = min(ttl, r.ttl)
+		} else if r.error != nil {
+			errs = append(errs, r.error)
+		}
+	}
+	if len(ips) > 0 {
+		return ips, ttl, nil
+	}
+	if len(errs) > 0 {
+		if len(errs) == 1 || go_errors.Is(errs[0], errs[1]) {
+			return nil, 0, errs[0]
+		}
+		return nil, 0, errors.Combine(errs...)
+	}
+	return nil, 0, dns.ErrEmptyResponse
 }
 
 type result struct {
@@ -89,44 +114,29 @@ type result struct {
 func doFetch(ctx context.Context, s CachedNameserver, fqdn string, option dns.IPOption) result {
 	sub4, sub6 := s.getCacheController().registerSubscribers(fqdn, option)
 	defer closeSubscribers(sub4, sub6)
-
-	noResponseErrCh := make(chan error, 2)
-	onEvent := func(sub *pubsub.Subscriber) (*IPRecord, error) {
-		if sub == nil {
-			return nil, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case err := <-noResponseErrCh:
-			return nil, err
-		case msg := <-sub.Wait():
-			sub.Close()
-			return msg.(*IPRecord), nil // should panic
-		}
+	sub := sub4
+	if sub == nil {
+		sub = sub6
 	}
 
+	// fetch shares each family separately, including transport errors.
+	noResponseErrCh := make(chan error, 1)
 	start := time.Now()
 	s.sendQuery(ctx, noResponseErrCh, fqdn, option)
-
-	rec4, err4 := onEvent(sub4)
-	rec6, err6 := onEvent(sub6)
-
-	var errs []error
-	if err4 != nil {
-		errs = append(errs, err4)
+	var ips []net.IP
+	var ttl int32
+	var err error
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case err = <-noResponseErrCh:
+	case msg := <-sub.Wait():
+		ips, ttl, err = msg.(*IPRecord).getIPs()
 	}
-	if err6 != nil {
-		errs = append(errs, err6)
-	}
-
-	ips, ttl, err := merge(option, rec4, rec6, errs...)
 	var rTTL uint32
 	if ttl > 0 {
 		rTTL = uint32(ttl)
-	} else if ttl == 0 && go_errors.Is(err, errRecordNotFound) {
-		rTTL = 0
-	} else { // edge case: where a fast rep's ttl expires during the rtt of a slower, parallel query
+	} else if len(ips) > 0 { // the reply's TTL may expire during the query
 		rTTL = 1
 	}
 

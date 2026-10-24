@@ -14,7 +14,6 @@ import (
 	dns_feature "github.com/xtls/xray-core/features/dns"
 
 	"golang.org/x/net/dns/dnsmessage"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -37,7 +36,8 @@ type CacheController struct {
 	pub           *pubsub.Service
 	cacheCleanup  *task.Periodic
 	highWatermark int
-	requestGroup  singleflight.Group
+	requestGroup  queryGroup
+	queryTimeout  time.Duration
 }
 
 func NewCacheController(name string, disableCache bool, serveStale bool, serveExpiredTTL uint32) *CacheController {
@@ -48,6 +48,7 @@ func NewCacheController(name string, disableCache bool, serveStale bool, serveEx
 		serveExpiredTTL: -int32(serveExpiredTTL),
 		ips:             make(map[string]*record),
 		pub:             pubsub.NewService(),
+		queryTimeout:    sharedQueryTimeout,
 	}
 
 	c.cacheCleanup = &task.Periodic{

@@ -169,6 +169,8 @@ func (s *TCPNameServer) sendQuery(ctx context.Context, noResponseErrCh chan<- er
 				return
 			}
 			defer conn.Close()
+			stop := context.AfterFunc(dnsCtx, func() { conn.Close() })
+			defer stop()
 			dnsReqBuf := buf.New()
 			err = binary.Write(dnsReqBuf, binary.BigEndian, uint16(b.Len()))
 			if err != nil {

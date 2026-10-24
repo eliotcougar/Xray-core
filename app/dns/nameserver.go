@@ -140,6 +140,10 @@ func NewClient(
 		if ns.TimeoutMs > 0 {
 			timeoutMs = time.Duration(ns.TimeoutMs) * time.Millisecond
 		}
+		if cached, ok := server.(CachedNameserver); ok {
+			cache := cached.getCacheController()
+			cache.queryTimeout = max(cache.queryTimeout, timeoutMs)
+		}
 
 		checkSystem := ns.QueryStrategy == QueryStrategy_USE_SYS
 

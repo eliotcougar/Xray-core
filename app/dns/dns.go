@@ -209,6 +209,11 @@ func (s *DNS) Start() error {
 
 // Close implements common.Closable.
 func (s *DNS) Close() error {
+	for _, client := range s.clients {
+		if cached, ok := client.server.(CachedNameserver); ok {
+			cached.getCacheController().requestGroup.close()
+		}
+	}
 	if s.script != nil {
 		s.script.close()
 	}
