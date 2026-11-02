@@ -44,6 +44,24 @@ var (
 	globalDialerAccess sync.Mutex
 )
 
+// RetireHTTPClients removes all cached XHTTP clients from consideration for
+// future streams. Clients with active streams are allowed to drain and are
+// closed when their last stream finishes; idle clients are closed immediately.
+func RetireHTTPClients() int {
+	globalDialerAccess.Lock()
+	dialers := globalDialerMap
+	globalDialerMap = nil
+	globalDialerAccess.Unlock()
+
+	// Closing transports outside the global lock lets new streams start without
+	// waiting for retired clients to finish their cleanup.
+	retired := 0
+	for _, dialer := range dialers {
+		retired += dialer.retire()
+	}
+	return retired
+}
+
 func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *internet.MemoryStreamConfig) (DialerClient, *XmuxClient) {
 	realityConfig := reality.ConfigFromStreamSettings(streamSettings)
 
@@ -76,6 +94,9 @@ func getHTTPClient(ctx context.Context, dest net.Destination, streamSettings *in
 	}
 
 	xmuxClient := xmuxManager.GetXmuxClient(ctx)
+	// Reserve the stream before retirement can detach and close this manager.
+	// Every caller must release this reference with DoneRunning.
+	xmuxClient.AddRunning()
 	return xmuxClient.XmuxConn.(DialerClient), xmuxClient
 }
 
@@ -395,12 +416,6 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 		errors.LogInfo(ctx, fmt.Sprintf("XHTTP is downloading from %s, mode %s, HTTP version %s, host %s", dest2, "stream-down", httpVersion2, requestURL2.Host))
 	}
 
-	if xmuxClient != nil {
-		xmuxClient.AddRunning()
-	}
-	if xmuxClient2 != nil && xmuxClient2 != xmuxClient {
-		xmuxClient2.AddRunning()
-	}
 	var closed atomic.Int32
 
 	reader, writer := io.Pipe()
@@ -475,6 +490,11 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 
 		dynamicHTTPClient := httpClient
 		dynamicXmuxClient := xmuxClient
+		defer func() {
+			if dynamicXmuxClient != nil && dynamicXmuxClient != xmuxClient {
+				dynamicXmuxClient.DoneRunning()
+			}
+		}()
 		for {
 			// by offloading the uploads into a buffered pipe, multiple conn.Write
 			// calls get automatically batched together into larger POST requests.
@@ -511,10 +531,22 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 
 				if dynamicXmuxClient != nil && (dynamicXmuxClient.LeftRequests.Add(-1) <= 0 ||
 					(dynamicXmuxClient.UnreusableAt != time.Time{} && lastWrite.After(dynamicXmuxClient.UnreusableAt))) {
+					previousXmuxClient := dynamicXmuxClient
 					dynamicHTTPClient, dynamicXmuxClient = getHTTPClient(ctx, dest, streamSettings)
+					if previousXmuxClient != xmuxClient {
+						previousXmuxClient.DoneRunning()
+					}
 				}
 
-				go func(hClient DialerClient) {
+				// A rotated upload client can outlive its pool entry while this POST
+				// is in flight, including after the next rotation or session close.
+				if dynamicXmuxClient != nil {
+					dynamicXmuxClient.addRequest()
+				}
+				go func(hClient DialerClient, xClient *XmuxClient) {
+					if xClient != nil {
+						defer xClient.doneRequest()
+					}
 					err := hClient.PostPacket(
 						ctx,
 						requestURL.String(),
@@ -528,7 +560,7 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 						uploadPipeReader.Interrupt()
 						doSplit.Store(false)
 					}
-				}(dynamicHTTPClient)
+				}(dynamicHTTPClient, dynamicXmuxClient)
 
 				if _, ok := dynamicHTTPClient.(*DefaultDialerClient); ok {
 					<-wroteRequest.Wait()
