@@ -18,6 +18,14 @@ type BurstObservatory interface {
 	Check(tag []string)
 }
 
+// StatefulObservatory carries probe history between instances on the same network.
+// RestoreObservation must be called before Start. Only allowed outbound tags are restored.
+type StatefulObservatory interface {
+	Observatory
+	SnapshotObservation() ([]byte, error)
+	RestoreObservation(state []byte, allowed []string) error
+}
+
 func ObservatoryType() interface{} {
 	return (*Observatory)(nil)
 }
