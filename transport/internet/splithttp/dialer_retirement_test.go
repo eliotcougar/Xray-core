@@ -84,13 +84,13 @@ func TestRetirementReservesSelectedStream(t *testing.T) {
 func TestRetirementWaitsForLastUploadRequest(t *testing.T) {
 	dest, settings, _ := retirementTestPool(t)
 	transport, client := getHTTPClient(context.Background(), dest, settings)
-	client.AddRunning() // An upload POST still uses this client after rotation.
+	client.addRequest() // An upload POST still uses this client after rotation.
 	RetireHTTPClients()
 	client.DoneRunning() // Release the session's reference.
 	if transport.IsClosed() {
 		t.Fatal("retirement closed an in-flight upload")
 	}
-	client.DoneRunning()
+	client.doneRequest()
 	if got := transport.(*retirementTestClient).closeCalls.Load(); got != 1 {
 		t.Fatalf("drained upload closed %d times, want 1", got)
 	}
@@ -168,6 +168,9 @@ func TestRetirementDrainsRotatedPacketUpload(t *testing.T) {
 	case upload = <-started:
 	case <-time.After(5 * time.Second):
 		t.Fatal("packet upload did not start")
+	}
+	if got := manager.xmuxClients[0].Running.Load(); got != 1 {
+		t.Fatalf("upload POST changed the stream concurrency count to %d, want 1", got)
 	}
 	// Request-budget expiry already detached the original download client.
 	if got := RetireHTTPClients(); got != 1 {

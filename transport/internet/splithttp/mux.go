@@ -24,6 +24,7 @@ type XmuxClient struct {
 	LeftRequests atomic.Int32
 	UnreusableAt time.Time
 	NotUsed      atomic.Bool
+	requests     atomic.Int32
 	closeOnce    sync.Once
 }
 
@@ -36,9 +37,19 @@ func (c *XmuxClient) DoneRunning() {
 	c.maybeClose()
 }
 
+// Upload requests can outlive a stream reference without counting as new streams.
+func (c *XmuxClient) addRequest() {
+	c.requests.Add(1)
+}
+
+func (c *XmuxClient) doneRequest() {
+	c.requests.Add(-1)
+	c.maybeClose()
+}
+
 // close the XmuxConn if it is not used and has no running requests
 func (c *XmuxClient) maybeClose() {
-	if c.NotUsed.Load() && c.Running.Load() <= 0 {
+	if c.NotUsed.Load() && c.Running.Load() <= 0 && c.requests.Load() <= 0 {
 		c.closeOnce.Do(func() {
 			common.Close(c.XmuxConn)
 		})

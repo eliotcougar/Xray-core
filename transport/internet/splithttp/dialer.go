@@ -541,11 +541,11 @@ func Dial(ctx context.Context, dest net.Destination, streamSettings *internet.Me
 				// A rotated upload client can outlive its pool entry while this POST
 				// is in flight, including after the next rotation or session close.
 				if dynamicXmuxClient != nil {
-					dynamicXmuxClient.AddRunning()
+					dynamicXmuxClient.addRequest()
 				}
 				go func(hClient DialerClient, xClient *XmuxClient) {
 					if xClient != nil {
-						defer xClient.DoneRunning()
+						defer xClient.doneRequest()
 					}
 					err := hClient.PostPacket(
 						ctx,
